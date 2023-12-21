@@ -13,6 +13,8 @@ broker_address = "broker.mqttdashboard.com"
 port = 1883
 topic = "ESP32/Led"
 
+
+# sử dụng model yolov8 để detect phương tiện
 model = YOLO('../model/yolov8n.pt')
 
 green_light_duration = 5  # Thời gian bật đèn xanh
@@ -49,6 +51,7 @@ mqtt_thread.start()
 
 light_timer = 5  # Khởi tạo đếm thời gian
 
+# hàm xác định và in ra trạng thái màu đèn
 def update_traffic_light(frame, traffic_light_status, countdown_timer):
     global light_timer
 
@@ -59,11 +62,8 @@ def update_traffic_light(frame, traffic_light_status, countdown_timer):
     if traffic_light_status == 'Green':
         color = green_color
         status_value = 0
-    elif traffic_light_status == 'Red':
+    else :
         color = red_color
-        status_value = 1
-    else:
-        color = yellow_color
         status_value = 1
 
     # Kiểm tra nếu đã đủ thời gian để gửi tín hiệu mới
@@ -73,13 +73,16 @@ def update_traffic_light(frame, traffic_light_status, countdown_timer):
 
         # Cập nhật giá trị trong danh sách
 
+    #in ra màn hình trạng thái của đèn giao thông
     cv2.putText(frame, traffic_light_status, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
     cv2.putText(frame, f"{traffic_light_status} - {countdown_timer}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
    
     return status_value
 
 
+# hàm đếm số lượng xe
 def count_cars_in_frame(frame):
+    # Danh sách các lớp đối tượng mà mô hình có thể phát hiện
     classNames = ["person","bicycle","car","motorcycle","airplane","bus","train","truck",
               "boat","traffic light","fire hydrant","stop sign","parking meter","bench",
               "bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe",
@@ -94,11 +97,13 @@ def count_cars_in_frame(frame):
     car_count = 0  
     is_train_detected = False
 
+    # Thực hiện dự đoán với mô hình YOLO và truyền frame vào
     results = model(frame, stream=True)
 
     for r in results:
         boxes = r.boxes
         for box in boxes:
+            # lấy ra tọa độ của đối tượng phát hiện
             x1, y1, x2, y2 = box.xyxy[0]
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
@@ -107,7 +112,7 @@ def count_cars_in_frame(frame):
 
             cls = int(box.cls[0])
             currentClass = classNames[cls]
-
+            # Kiểm tra nếu đối tượng là 'car', 'truck', 'Motorcycle' hoặc 'Bus' và độ chắc chắn lớn hơn 0.1
             if (currentClass == 'car' or currentClass == 'truck' or currentClass == 'Motorcycle' or currentClass == 'Bus') and conf > 0.1:
                 car_count += 1
                 cvzone.cornerRect(frame, (x1, y1, w, h))
@@ -118,29 +123,32 @@ def count_cars_in_frame(frame):
     return car_count, is_train_detected
 
 def create_quad_display(video_paths,case_video):
+    # Tạo cửa sổ hiển thị Quad
     cv2.namedWindow('Quad Display', cv2.WINDOW_NORMAL)
     cv2.resizeWindow('Quad Display', 960, 720)
 
     green_light_duration = 5  # Đặt thời gian đèn xanh là 5 giây
-    yellow_light_duration = 5  # Đặt thời gian đèn vàng là 2 giây
+    # Đặt thời gian đếm ngược ban đầu là thời gian đèn xanh
     countdown_timer = green_light_duration
-    is_yellow_light = False  # Biến để kiểm tra trạng thái đèn vàng
+
+    # Mảng chứa các đối tượng VideoCapture cho từng đường video
     video_captures = [cv2.VideoCapture(video_path) for video_path in video_paths]
 
     global light_timer
 
     while True:
         frames = []
-
+        # Đọc frame từ mỗi đường video
         for cap in video_captures:
             ret, frame = cap.read()
             if not ret or frame is None or frame.size == 0:
                 break
             frames.append(frame)
-
+        # Kiểm tra xem có đủ 4 frames từ 4 đường video hay không
         if len(frames) != 4:
             break
-
+            
+        # Resize frame để có kích thước giống nhau
         h, w, _ = frames[0].shape
         h, w = h // 2, w // 2
         frames_resized = [cv2.resize(frame, (w, h)) for frame in frames]
@@ -150,7 +158,8 @@ def create_quad_display(video_paths,case_video):
         car_counts = []
         is_train_detected_list = []
         traffic_lights = []
-
+        
+        # Đếm số lượng xe và kiểm tra có xuất hiện tàu hỏa trong mỗi frame
         for i, frame in enumerate(frames_resized):
             car_count, is_train_detected = count_cars_in_frame(frame)
             car_counts.append(car_count)
@@ -160,18 +169,14 @@ def create_quad_display(video_paths,case_video):
             y1, y2 = y * h, (y + 1) * h
             x1, x2 = x * w, (x + 1) * w
             quad_frame[y1:y2, x1:x2] = frame
-
+            
+        # Kiểm tra xem có tàu hỏa xuất hiện trong ít nhất một frame hay không
         any_train_detected = any(is_train_detected_list)
-
+        
+        # Xử lý trạng thái đèn giao thông cho mỗi frame
         for i, frame in enumerate(frames_resized):
-            if is_yellow_light:
-                # Hiển thị đèn vàng nếu đang ở trạng thái đèn vàng
-                value = update_traffic_light(frame, 'Yellow', countdown_timer)
-                cv2.putText(quad_frame, f'Traffic Light {i + 1}: Yellow', (20, 20 + (i + 1) * 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                traffic_lights.append(value)
-            else:
-                # Xác định trạng thái đèn giao thông dựa trên quy tắc mới
+           
+                # Xác định trạng thái đèn giao thông dựa trên quy tắc
                 if any_train_detected:
                     # Trường hợp có tàu hỏa, đèn xanh nếu có tàu hỏa và ngược lại
                     traffic_light_status = 'Green' if is_train_detected_list[i] else 'Red'
@@ -188,20 +193,17 @@ def create_quad_display(video_paths,case_video):
         
         print(traffic_lights)
 
+        #thực hiện đếm ngược thời gian cho mỗi đèn
         if not any_train_detected:
-            if is_yellow_light:
-                countdown_timer -= 1
+            countdown_timer -= 1
 
-                if countdown_timer < 0:
-                    countdown_timer = green_light_duration
-                    is_yellow_light = False
-            else:
-                countdown_timer -= 1
+            if countdown_timer < 0:
+                countdown_timer = green_light_duration
 
-                if countdown_timer < 0:
-                    countdown_timer = yellow_light_duration
-                    is_yellow_light = True
-
+            if countdown_timer < 0:
+                countdown_timer = green_light_duration
+                # Thực hiện các thao tác cần thiết khi chuyển từ đèn đỏ sang đèn xanh
+               
         for i, frame in enumerate(frames_resized):
             x, y = i % 2, i // 2
             y1, y2 = y * h, (y + 1) * h
